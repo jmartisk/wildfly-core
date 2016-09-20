@@ -27,15 +27,18 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Enumeration;
 
 import org.jboss.as.controller.Extension;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
+import org.jboss.shrinkwrap.api.asset.ClassLoaderAsset;
 import org.jboss.shrinkwrap.api.exporter.StreamExporter;
 import org.jboss.shrinkwrap.api.exporter.ZipExporter;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
@@ -138,14 +141,42 @@ public class ExtensionUtils {
 
     private static StreamExporter createResourceRoot(Class<? extends Extension> extension, Package... additionalPackages) throws IOException {
         final JavaArchive archive = ShrinkWrap.create(JavaArchive.class);
-        archive.addPackage(extension.getPackage());
+        storePackage(extension.getPackage(), extension.getClassLoader(), archive);
         if (additionalPackages != null) {
             for (Package pkg : additionalPackages) {
-                archive.addPackage(pkg);
+                storePackage(pkg, extension.getClassLoader(), archive);
             }
         }
+
         archive.addAsServiceProvider(Extension.class, extension);
         return archive.as(ZipExporter.class);
+    }
+
+    private static void storePackage(Package pkg, ClassLoader classLoader, JavaArchive archive) throws IOException {
+        archive.addPackage(pkg);
+
+        // Store misc files that shrinkwrap apparently doesn't
+        String packagePath = pkg.getName().replace('.', '/');
+        Enumeration<URL> resources = classLoader.getResources(packagePath);
+        while (resources.hasMoreElements()) {
+            URL url = resources.nextElement();
+            try {
+                File file = new File(url.toURI());
+                File[] children;
+                if (file.isDirectory() && (children = file.listFiles()) != null) {
+                    for (File child : children) {
+                        if (!child.isDirectory() && !child.getName().endsWith(".class")) {
+                            String name = packagePath + '/' + child.getName() ;
+                            archive.addAsResource(new ClassLoaderAsset(name, classLoader), name);
+                        }
+
+                    }
+                }
+            } catch (URISyntaxException | IllegalArgumentException e) {
+                // ignore; sometimes the package is also visible on the classpath inside other jars
+                // resulting in a URL that cannot be used to create a file
+            }
+        }
     }
 
     private static void deleteRecursively(Path path) {
