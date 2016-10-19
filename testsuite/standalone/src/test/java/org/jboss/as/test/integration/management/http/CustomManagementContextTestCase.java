@@ -26,9 +26,13 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import javax.inject.Inject;
 
+import org.apache.http.Header;
 import org.apache.http.HttpResponse;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
@@ -47,6 +51,7 @@ import org.jboss.as.test.integration.management.extension.ExtensionUtils;
 import org.jboss.as.test.integration.management.extension.customcontext.CustomContextExtension;
 import org.jboss.dmr.ModelNode;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -122,7 +127,7 @@ public class CustomManagementContextTestCase {
     }
 
     @Test
-    public void test() throws IOException {
+    public void test() throws IOException, InterruptedException {
 
         //if (true) return;
 
@@ -130,6 +135,7 @@ public class CustomManagementContextTestCase {
         final String remapUrl = urlBase + "remap/foo";
         final String badRemapUrl = urlBase + "remap/bad";
         final String staticUrl = urlBase + "static/hello.txt";
+        final String staticUrlDirectory = urlBase + "static/";
         final String badStaticUrl = urlBase + "static/bad.txt";
 
         // Sanity check
@@ -148,7 +154,8 @@ public class CustomManagementContextTestCase {
 
         // Unauthenticated check
 
-        try (CloseableHttpClient client = HttpClients.createDefault()) {
+        try (CloseableHttpClient client = HttpClients.custom().setMaxConnPerRoute(10).build()) {
+//            TimeUnit.DAYS.sleep(1);
             HttpResponse resp = client.execute(new HttpGet(remapUrl));
             assertEquals(401, resp.getStatusLine().getStatusCode());
             resp = client.execute(new HttpGet(staticUrl));
@@ -170,6 +177,20 @@ public class CustomManagementContextTestCase {
             assertEquals(200, resp.getStatusLine().getStatusCode());
             String text = EntityUtils.toString(resp.getEntity());
             assertTrue(text, text.startsWith("Hello"));
+
+            // the response should contain headers:
+            // X-Frame-Options: SAMEORIGIN
+            // Cache-Control: public, max-age=2678400
+            final Map<String, String> headersMap = Arrays.stream(resp.getAllHeaders())
+                    .collect(Collectors.toMap(Header::getName, Header::getValue));
+            Assert.assertTrue("'X-Frame-Options: SAMEORIGIN' header is expected",
+                    headersMap.getOrDefault("X-Frame-Options", "").contains("SAMEORIGIN"));
+            Assert.assertTrue("Cache-Control header with max-age=2678400 is expected,",
+                    headersMap.getOrDefault("Cache-Control", "").contains("max-age=2678400"));
+
+            // directory listing is not allowed
+            resp = client.execute(new HttpGet(staticUrlDirectory));
+            assertEquals(404, resp.getStatusLine().getStatusCode());
 
             // POST check
             resp = client.execute(new HttpPost(remapUrl));
